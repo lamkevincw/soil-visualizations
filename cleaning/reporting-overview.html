@@ -1,0 +1,442 @@
+<html>
+<style>
+    @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@200;300;400;500;600;700&display=swap');
+
+    * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+        font-family: 'Poppins', sans-serif;
+    }
+
+    nav {
+        display: flex;
+        height: 80px;
+        width: 100%;
+        background: #1b1b1b;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 50px 0 100px;
+        flex-wrap: wrap;
+        flex-grow: 0;
+        flex-shrink: 0;
+    }
+
+    nav .logo {
+        color: #fff;
+        font-size: 35px;
+        font-weight: 600;
+    }
+
+    nav ul {
+        display: flex;
+        flex-wrap: wrap;
+        list-style: none;
+    }
+
+    nav ul li a {
+        color: #f2f2f2;
+        text-decoration: none;
+        font-size: 18px;
+        font-weight: 500;
+        padding: 8px 15px;
+        border-radius: 5px;
+        letter-spacing: 1px;
+        transition: all 0.3s ease;
+    }
+
+    nav ul li label {
+        color: #f2f2f2;
+        text-decoration: none;
+        font-size: 20px;
+        font-weight: 500;
+        transition: all 0.3s ease;
+    }
+
+    nav ul li a.active,
+    nav ul li a:hover {
+        color: #111;
+        background: #fff;
+    }
+
+    nav .menu-btn i {
+        color: #fff;
+        font-size: 22px;
+        cursor: pointer;
+        display: none;
+    }
+
+    input[type="checkbox"] {
+        display: none;
+    }
+
+    @media (max-width: 1000px) {
+        nav {
+            padding: 0 40px 0 50px;
+        }
+    }
+
+    @media (max-width: 920px) {
+        nav .menu-btn i {
+            display: block;
+        }
+
+        nav ul {
+            position: fixed;
+            top: 80px;
+            left: -100%;
+            background: #111;
+            height: 100vh;
+            width: 100%;
+            text-align: center;
+            display: block;
+            transition: all 0.3s ease;
+        }
+
+        nav ul li {
+            width: 100%;
+            margin: 40px 0;
+        }
+
+        nav ul li a {
+            width: 100%;
+            margin-left: -100%;
+            display: block;
+            font-size: 20px;
+            transition: 0.6s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+        }
+
+        nav ul li a.active,
+        nav ul li a:hover {
+            background: none;
+            color: cyan;
+        }
+    }
+
+    .flex-container {
+        display: flex;
+        width: 100%;
+        height: 100%;
+        flex-direction: column;
+        z-index: -1;
+    }
+
+    .content {
+        text-align: center;
+        width: 100%;
+        height: 80%;
+        padding: 0 30px;
+        color: #1b1b1b;
+        flex-grow: 1;
+        flex-shrink: 1;
+    }
+
+    .content div {
+        font-size: 40px;
+        font-weight: 700;
+    }
+
+    .content .row {
+        height: 25%;
+        clear: both;
+    }
+
+    .content .column {
+        float: left;
+        width: 25%;
+        padding: 0;
+        font-size: 14px;
+    }
+
+    .content .tableHeader {
+        border: 1px solid black;
+        height: 100px;
+    }
+
+    .content .tableRow {
+        border: 1px solid black;
+        height: 100px;
+    }
+
+    .content img {
+        display: block;
+        margin-left: auto;
+        margin-right: auto;
+        height: 85%;
+        z-index: 1;
+    }
+
+    .content .areaName {
+        font-size: 24px;
+        font-weight: bold;
+    }
+
+    .content table {
+        display: table;
+        width: 100%;
+        border-spacing: 0px;
+        border-collapse: collapse;
+    }
+
+    .content th {
+        border: 1px solid black;
+        background-color: white;
+    }
+
+    .content tr {
+        background-color: limegreen;
+    }
+
+    .content td {
+        border-bottom: 1px solid black;
+        padding-left: 10px;
+    }
+
+    .warningFlag {
+        background-color: red;
+    }
+
+    #warningRow {
+        background-color: rgb(192, 248, 192);
+    }
+
+    #offlineRow {
+        background-color: pink;
+    }
+</style>
+
+<body>
+    <div class="flex-container">
+        <nav>
+            <div class="logo">Data Cleaning</div>
+            <input type="checkbox" id="click">
+            <label for="click" class="menu-btn">
+                <i class="fas fa-bars"></i>
+            </label>
+            <ul>
+                <li><a href="timeseries-overview.html">Timeseries</a></li>
+                <li><a href="co2-o2-overview.html">CO2 vs Oxygen</a></li>
+                <li><label>|</label></li>
+                <li><a class="active" href="reporting-overview.html">Reporting</a></li>
+            </ul>
+        </nav>
+        <div class="content">
+            <label class="areaName">Hoosier</label>
+            <table class="table">
+                <tr>
+                    <th>Name</th>
+                    <th>Last Reported</th>
+                    <th>Battery<br>Voltage</th>
+                    <th>Sensor1<br>Reporting</th>
+                    <th>Sensor2<br>Reporting</th>
+                    <th>Sensor3<br>Reporting</th>
+                    <th>Sensor1<br>All 0's</th>
+                    <th>Sensor2<br>All 0's</th>
+                    <th>Sensor3<br>All 0's</th>
+                    <th>Sensor1<br>Too Small</th>
+                    <th>Sensor2<br>Too Small</th>
+                    <th>Sensor3<br>Too Small</th>
+                </tr>
+                <tr>
+                    <td>Q01</td>
+                    <td>11/25/2021, 18:13:23</td>
+                    <td>12.784</td>
+                    <td>True</td>
+                    <td>True</td>
+                    <td>True</td>
+                    <td>False</td>
+                    <td>False</td>
+                    <td>False</td>
+                    <td>False</td>
+                    <td>False</td>
+                    <td>False</td>
+                </tr>
+                <tr id="warningRow">
+                    <td>Q02</td>
+                    <td>11/25/2021, 18:14:44</td>
+                    <td>12.900</td>
+                    <td>True</td>
+                    <td>True</td>
+                    <td>True</td>
+                    <td>False</td>
+                    <td>False</td>
+                    <td>False</td>
+                    <td>False</td>
+                    <td>False</td>
+                    <td class="warningFlag">True</td>
+                </tr>
+                <tr id="offlineRow">
+                    <td class="warningFlag">Q03</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                </tr>
+                <tr id="offlineRow">
+                    <td class="warningFlag">Q04</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                </tr>
+                <tr id="offlineRow">
+                    <td class="warningFlag">Q05</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                </tr>
+                <tr id="warningRow">
+                    <td>Q06</td>
+                    <td>11/25/2021, 18:15:44</td>
+                    <td>12.929</td>
+                    <td>True</td>
+                    <td>True</td>
+                    <td class="warningFlag">False</td>
+                    <td>False</td>
+                    <td>False</td>
+                    <td>False</td>
+                    <td>False</td>
+                    <td>False</td>
+                    <td>False</td>
+                </tr>
+                <tr id="offlineRow">
+                    <td class="warningFlag">Q07</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                </tr>
+                <tr id="offlineRow">
+                    <td class="warningFlag">Q08</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                </tr>
+                <tr id="offlineRow">
+                    <td class="warningFlag">Q09</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                </tr>
+                <tr>
+                    <td>Q10</td>
+                    <td>11/25/2021, 18:12:41</td>
+                    <td>12.880</td>
+                    <td>True</td>
+                    <td>True</td>
+                    <td>True</td>
+                    <td>False</td>
+                    <td>False</td>
+                    <td>False</td>
+                    <td>False</td>
+                    <td>False</td>
+                    <td>False</td>
+                </tr>
+                <tr id="warningRow">
+                    <td>Q11</td>
+                    <td>11/25/2021, 18:13:20</td>
+                    <td class="warningFlag">8.751</td>
+                    <td>True</td>
+                    <td>True</td>
+                    <td class="warningFlag">False</td>
+                    <td>False</td>
+                    <td>False</td>
+                    <td>False</td>
+                    <td>False</td>
+                    <td>False</td>
+                    <td>False</td>
+                </tr>
+                <tr id="offlineRow">
+                    <td class="warningFlag">Q12</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                    <td>nan</td>
+                </tr>
+                <tr>
+                    <td>Q13</td>
+                    <td>11/25/2021, 18:15:00</td>
+                    <td>12.832</td>
+                    <td>True</td>
+                    <td>True</td>
+                    <td>True</td>
+                    <td>False</td>
+                    <td>False</td>
+                    <td>False</td>
+                    <td>False</td>
+                    <td>False</td>
+                    <td>False</td>
+                </tr>
+                <tr>
+                    <td>Q14</td>
+                    <td>11/25/2021, 17:57:59</td>
+                    <td>12.784</td>
+                    <td>True</td>
+                    <td>True</td>
+                    <td>True</td>
+                    <td>False</td>
+                    <td>False</td>
+                    <td>False</td>
+                    <td>False</td>
+                    <td>False</td>
+                    <td>False</td>
+                </tr>
+            </table>
+            </div>
+        </div>
+    </div>
+</body>
+
+</html>

@@ -1,0 +1,225 @@
+<html>
+<style>
+    @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@200;300;400;500;600;700&display=swap');
+
+    * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+        font-family: 'Poppins', sans-serif;
+    }
+
+    nav {
+        display: flex;
+        height: 80px;
+        width: 100%;
+        background: #1b1b1b;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 50px 0 100px;
+        flex-wrap: wrap;
+        flex-grow: 0;
+        flex-shrink: 0;
+    }
+
+    nav .logo {
+        color: #fff;
+        font-size: 35px;
+        font-weight: 600;
+    }
+
+    nav ul {
+        display: flex;
+        flex-wrap: wrap;
+        list-style: none;
+    }
+
+    nav ul li a {
+        color: #f2f2f2;
+        text-decoration: none;
+        font-size: 18px;
+        font-weight: 500;
+        padding: 8px 15px;
+        border-radius: 5px;
+        letter-spacing: 1px;
+        transition: all 0.3s ease;
+    }
+
+    nav ul li label {
+        color: #f2f2f2;
+        text-decoration: none;
+        font-size: 20px;
+        font-weight: 500;
+        transition: all 0.3s ease;
+    }
+
+    nav ul li a.active,
+    nav ul li a:hover {
+        color: #111;
+        background: #fff;
+    }
+
+    nav .menu-btn i {
+        color: #fff;
+        font-size: 22px;
+        cursor: pointer;
+        display: none;
+    }
+
+    input[type="checkbox"] {
+        display: none;
+    }
+
+    @media (max-width: 1000px) {
+        nav {
+            padding: 0 40px 0 50px;
+        }
+    }
+
+    @media (max-width: 920px) {
+        nav .menu-btn i {
+            display: block;
+        }
+
+        nav ul {
+            position: fixed;
+            top: 80px;
+            left: -100%;
+            background: #111;
+            height: 100vh;
+            width: 100%;
+            text-align: center;
+            display: block;
+            transition: all 0.3s ease;
+        }
+
+        nav ul li {
+            width: 100%;
+            margin: 40px 0;
+        }
+
+        nav ul li a {
+            width: 100%;
+            margin-left: -100%;
+            display: block;
+            font-size: 20px;
+            transition: 0.6s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+        }
+
+        nav ul li a.active,
+        nav ul li a:hover {
+            background: none;
+            color: cyan;
+        }
+    }
+
+    .flex-container {
+        display: flex;
+        width: 100%;
+        height: 100%;
+        flex-direction: column;
+        z-index: -1;
+    }
+
+    .content {
+        text-align: center;
+        width: 100%;
+        height: 80%;
+        padding: 0 30px;
+        color: #1b1b1b;
+        flex-grow: 1;
+        flex-shrink: 1;
+    }
+
+    .content div {
+        font-size: 40px;
+        font-weight: 700;
+    }
+
+    .content .row {
+        height: 25%;
+        clear: both;
+    }
+
+    .content .column {
+        float: left;
+        width: 25%;
+        padding: 0;
+        font-size: 14px;
+    }
+
+    .content table {
+        border: 1px solid black;
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        height: 100%;
+    }
+
+    .content th,
+    td {
+        border: 1px solid black;
+        width: 25%;
+        text-align: center;
+    }
+
+    .content tr {
+        height: 25%;
+    }
+
+    .content img {
+        display: block;
+        margin-left: auto;
+        margin-right: auto;
+        height: 85%;
+        z-index: 1;
+    }
+</style>
+
+<body>
+    <div class="flex-container">
+        <nav>
+            <div class="logo">Data Cleaning</div>
+            <input type="checkbox" id="click">
+            <label for="click" class="menu-btn">
+                <i class="fas fa-bars"></i>
+            </label>
+            <ul>
+                <li><a href="timeseries-overview.html">Timeseries</a></li>
+                <li><a class="active" href="co2-o2-overview.html">CO2 vs Oxygen</a></li>
+                <li><label>|</label></li>
+                <li><a href="reporting-overview.html">Reporting</a></li>
+            </ul>
+        </nav>
+        <div class="content">
+            <div class="row">
+                <div class="column"><b>Q01</b><a href="CO2 Plots/Q01.png"><img src="CO2 Plots/Q01.png"></a></div>
+                <div class="column"><b>Q02</b><a href="CO2 Plots/Q02.png"><img src="CO2 Plots/Q02.png"></a></div>
+                <div class="column"><b>Q03</b><a href="CO2 Plots/Q03.png"><img src="CO2 Plots/Q03.png"></a></div>
+                <div class="column"><b>Q04</b><a href="CO2 Plots/Q04.png"><img src="CO2 Plots/Q04.png"></a></div>
+            </div>
+            <div class="row">
+                <div class="column"><b>Q05</b><a href="CO2 Plots/Q05.png"><img src="CO2 Plots/Q05.png"></a></div>
+                <div class="column"><b>Q06</b><a href="CO2 Plots/Q06.png"><img src="CO2 Plots/Q06.png"></a></div>
+                <div class="column"><b>Q07</b><a href="CO2 Plots/Q07.png"><img src="CO2 Plots/Q07.png"></a></div>
+                <div class="column"><b>Q08</b><a href="CO2 Plots/Q08.png"><img src="CO2 Plots/Q08.png"></a></div>
+            </div>
+            <div class="row">
+                <div class="column"><b>Q09</b><a href="CO2 Plots/Q09.png"><img src="CO2 Plots/Q09.png"></a></div>
+                <div class="column"><b>Q10</b><a href="CO2 Plots/Q10.png"><img src="CO2 Plots/Q10.png"></a></div>
+                <div class="column"><b>Q11</b><a href="CO2 Plots/Q11.png"><img src="CO2 Plots/Q11.png"></a></div>
+                <div class="column"><b>Q12</b><a href="CO2 Plots/Q12.png"><img src="CO2 Plots/Q12.png"></a></div>
+            </div>
+            <div class="row">
+                <div class="column"><b>Q13</b><a href="CO2 Plots/Q13.png"><img src="CO2 Plots/Q13.png"></a></div>
+                <div class="column"><b>Q14</b><a href="CO2 Plots/Q14.png"><img src="CO2 Plots/Q14.png"></a></div>
+                <div class="column"><b>Q15</b><a href="CO2 Plots/Q15.png"><img src="CO2 Plots/Q15.png"></a></div>
+                <div class="column"><b>Q16</b><a href="CO2 Plots/Q16.png"><img src="CO2 Plots/Q16.png"></a></div>
+            </div>
+        </div>
+    </div>
+</body>
+
+</html>

@@ -1,0 +1,1180 @@
+---
+title: "Data Cleaning"
+output: html_notebook
+---
+
+This is better viewed by opening the .Rmd inside of RStudio.
+
+Some specific data cleaning troubles are highlighted in the section "Examples of Data Cleaning Troubles". Before that there are some examples of some small data prep for working with the typical csv's that we deal with.
+
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+library(lubridate)
+library(rgdal)
+library(imputeTS)
+library(lme4)
+library(scales)
+```
+
+### Loading Data
+
+Currently data is stored and passed around as csv's. This will likely change in the future as the company scales and we migrate to a database.
+
+```{r}
+df <- read.csv("../data/site_A.csv")
+```
+
+### Helper functions
+
+We define some functions here that will be useful for visualizing the data as we go about cleaning it so that we know what needs to be fixed as quickly and easily as possible.
+
+```{r}
+plot_all_qs_xy <- function(df, x, y, type="lines", qs_to_ignore=c()) {
+  # add some documentation
+  if (type == "lines") {
+    p <- df %>%
+      filter(!name %in% qs_to_ignore) %>%
+      ggplot(aes(x=get(x), y=get(y), color=name)) + geom_line() +
+      xlab(x) + ylab(y)
+    print(p)
+  } else if (type == "points") {
+    p <- df %>%
+      filter(!name %in% qs_to_ignore) %>%
+      ggplot(aes(x=get(x), y=get(y), color=name)) + geom_point() +
+      xlab(x) + ylab(y)
+    print(p)
+  }
+}
+
+plot_all_qs_dt <- function(df, y, type="lines", qs_to_ignore=c()) {
+  start_time <- min(df$datetimes)
+  end_time <- max(df$datetimes)
+  intervals <- seq(start_time, end_time, by="1 day")
+  # add some documentation
+  if (type == "lines") {
+    p <- df %>%
+      filter(!name %in% qs_to_ignore) %>%
+      ggplot(aes(x=datetimes, y=get(y), color=name)) + geom_line() +
+      xlab("datetimes") + ylab(y) +
+      scale_x_continuous(breaks=intervals) +
+      theme(axis.text.x=element_text(angle=90))
+    print(p)
+  } else if (type == "points") {
+    p <- df %>%
+      filter(!name %in% qs_to_ignore) %>%
+      ggplot(aes(x=get(x), y=get(y), color=name)) + geom_point() +
+      xlab(x) + ylab(y)
+    print(p)
+  }
+}
+
+plot_each_q_xy <- function(df, x, y, type="points") {
+  quantifiers <- unique(df$name)
+  for (quantifier in quantifiers) {
+    p <- df %>%
+      filter(name==quantifier) %>%
+      ggplot(aes(x=get(x), y=get(y))) + geom_point() +
+      ggtitle(quantifier) + xlab(x) + ylab(y)
+    print(p)
+  }
+}
+
+plot_each_q <- function(df, variable) {
+  quantifiers <- unique(df$name)
+  for (quantifier in quantifiers) {
+    p <- df %>%
+      filter(name==quantifier) %>%
+      select(all_of(variable)) %>%
+      ggplot_na_distribution() + ggtitle(quantifier)
+    print(p)
+  }
+}
+```
+
+
+### Project lat/lon to y/x (easting/northing)
+
+
+```{r}
+# currently using the median to ignore 0's
+df <- df %>% group_by(name) %>% mutate(across(latitude:longitude, median)) %>% ungroup()
+# Q15 only has 0's for all lat/lons so we manually set them here
+df <- df %>%
+  mutate(longitude = replace(longitude, name == "Q15", -109.03921)) %>%
+  mutate(latitude = replace(latitude, name == "Q15", 51.874931))
+# projections
+lon_lat <- as.matrix(df[,c("longitude", "latitude")])
+east_north <- project(lon_lat, "+proj=utm +zone=12 +ellps=GRS80 +datum=NAD83 +units=m +no_defs")
+df <- df %>%
+        mutate(easting = east_north[,1]) %>%
+        mutate(northing = east_north[,2])
+```
+
+Here we can visualize the projections to check for errors.
+
+```{r}
+df %>% plot_all_qs_xy(x="easting", y="northing", type="points")
+```
+
+### Drop dead rows
+
+```{r}
+# only considering rows where at least 1 board reports
+df <- df %>%
+  filter(sensor1_data_received == "true" |
+         sensor2_data_received == "true" |
+         sensor3_data_received == "true")
+```
+
+### Handle Extreme Values
+
+Current hack for handling extreme values is to filter out the bottom and top 5%, then use whats left to compute mean and sd, then filter all data based on if it fits within mean +/- 3\*sd (could make this 4\*sd maybe). We do this for each sensor e.g. "sensor1_conc_ch4", ..., "sensor2_conc_co2", ... currently extreme values are replaed with NA's so we don't drop entire rows of data
+
+```{r}
+# The following could be made into a function and then used with mutate() instead
+# of this current manual looping structure
+cols_to_check <- c("tcm_temp",
+                   "sensor1_conc_ch4", "sensor1_conc_phc", "sensor1_conc_co2",
+                   "sensor1_detector_temp", "sensor1_board_temp", "sensor1_humidity", "sensor1_pid",
+                   "sensor1_oxy", "sensor1_pressure", "sensor1_pressure_temp",
+                   "sensor2_conc_ch4", "sensor2_conc_phc", "sensor2_conc_co2",
+                   "sensor2_detector_temp", "sensor2_board_temp", "sensor2_humidity", "sensor2_pid",
+                   "sensor2_oxy", "sensor2_pressure", "sensor2_pressure_temp",
+                   "sensor3_conc_ch4", "sensor3_conc_phc", "sensor3_conc_co2",
+                   "sensor3_detector_temp", "sensor3_board_temp", "sensor3_humidity", "sensor3_pid",
+                   "sensor3_oxy", "sensor3_pressure", "sensor3_pressure_temp")
+quantifiers <- unique(df$name)
+for (quantifier in quantifiers) {
+  df_quantifier <- df %>% filter(name == quantifier)
+  for (column in cols_to_check) {
+    quantiles <- quantile(df_quantifier[, column], probs=c(.05, .95), na.rm=TRUE)
+    lower_q <- quantiles[1]
+    upper_q <- quantiles[2]
+    mean_sd <- df_quantifier %>%
+      filter(get(column) >= lower_q, get(column) <= upper_q) %>%
+      summarise(mean = mean(get(column)), sd = sd(get(column)))
+    lower_threshold <- mean_sd$mean - 3*mean_sd$sd
+    upper_threshold <- mean_sd$mean + 3*mean_sd$sd
+    df <- df %>%
+      mutate("{column}" := replace(get(column),
+                                   name==quantifier & (get(column) < lower_threshold | get(column) > upper_threshold),
+                                   NA))
+  }
+}
+```
+
+### Standardize timestamps (30 min)
+
+We round to the nearest 30 min, then average the cases where multiple data points are rounded to the same 30 min (shouldn't happen but might).
+
+```{r}
+df <- df %>%
+  mutate(datetimes=as_datetime(timestamp / 1000, tz="Canada/Saskatchewan")) %>%
+  mutate(datetimes=round_date(datetimes, unit="30 min")) %>%
+  select(name, datetimes, easting, northing, tcm_temp,
+         sensor1_conc_ref, sensor1_conc_ch4, sensor1_conc_phc, sensor1_conc_co2,
+         sensor1_raw_ref, sensor1_raw_ch4, sensor1_raw_phc, sensor1_raw_co2,
+         sensor1_detector_temp, sensor1_board_temp, sensor1_humidity, sensor1_pid,
+         sensor1_oxy, sensor1_pressure, sensor1_pressure_temp,
+         sensor2_conc_ref, sensor2_conc_ch4, sensor2_conc_phc, sensor2_conc_co2,
+         sensor2_raw_ref, sensor2_raw_ch4, sensor2_raw_phc, sensor2_raw_co2,
+         sensor2_detector_temp, sensor2_board_temp, sensor2_humidity, sensor2_pid,
+         sensor2_oxy, sensor2_pressure, sensor2_pressure_temp,
+         sensor3_conc_ref, sensor3_conc_ch4, sensor3_conc_phc, sensor3_conc_co2,
+         sensor3_raw_ref, sensor3_raw_ch4, sensor3_raw_phc, sensor3_raw_co2,
+         sensor3_detector_temp, sensor3_board_temp, sensor3_humidity, sensor3_pid,
+         sensor3_oxy, sensor3_pressure, sensor3_pressure_temp) %>%
+  group_by(name, datetimes) %>%
+  summarise(across(easting:sensor3_pressure_temp, mean, na.rm=TRUE)) %>%
+  ungroup()
+
+start_time <- min(df$datetimes)
+end_time <- max(df$datetimes)
+intervals <- seq(start_time, end_time, by="30 min")
+qs_and_times <- expand.grid(quantifiers, intervals, stringsAsFactors=FALSE)
+names(qs_and_times) <- c("name", "datetimes")
+df <- merge(x=qs_and_times, y=df, by=c("name", "datetimes"), all.x=TRUE)
+
+# we then fill in the missing eastings and northings that were introduced with
+# the newly added timestamps
+df <- df %>%
+  group_by(name) %>%
+  mutate(easting = replace(easting,
+                           is.na(easting),
+                           mean(easting, na.rm=TRUE)),
+         northing = replace(northing,
+                            is.na(northing),
+                            mean(northing, na.rm=TRUE))) %>%
+  ungroup()
+```
+
+### Visualize timeseries
+
+We can inspect the timeseries for a specific variable as follows. (NOTE: this is where you will notice a serious improvement in the .Rmd inside of RStudio compared to the .html document)
+```{r}
+df %>% plot_each_q("tcm_temp")
+```
+
+
+# Data Imputation
+
+We use linear interopolation to fill in NA's and then follow up with a more time consuming process where an analyst visually checks each variable to see if the timeseries has any errors/artifacts that require a more nuanced solution.
+
+```{r}
+ys <- c("sensor1_conc_ch4", "sensor1_conc_phc", "sensor1_conc_co2", "sensor1_oxy",
+        "sensor1_detector_temp", "sensor1_board_temp", "sensor1_humidity",
+        "sensor1_pid", "sensor1_pressure",
+        "sensor1_pressure_temp",
+        "sensor2_conc_ch4", "sensor2_conc_phc", "sensor2_conc_co2", "sensor2_oxy",
+        "sensor2_detector_temp", "sensor2_board_temp", "sensor2_humidity",
+        "sensor2_pid", "sensor2_pressure",
+        "sensor2_pressure_temp",
+        "sensor3_conc_ch4", "sensor3_conc_phc", "sensor3_conc_co2", "sensor3_oxy",
+        "sensor3_detector_temp", "sensor3_board_temp", "sensor3_humidity",
+        "sensor3_pid", "sensor3_pressure",
+        "sensor3_pressure_temp")
+for (y in ys) {
+  df <- df %>%
+    group_by(name) %>%
+    mutate("{y}" := na_interpolation(get(y))) %>%
+    ungroup()
+}
+```
+
+### Fill in missing temperature data with third party data
+
+Third party weather data is sourced from: https://climate.weather.gc.ca/historical_data/search_historic_data_e.html. For Kerrobert we used the nearest station (Kindersley A) and downloaded the data as: en_climate_hourly_SK_4043899_10-2021_P1H.csv
+
+```{r}
+weather_df <- read.csv('../data/en_climate_hourly_SK_4043899_10-2021_P1H.csv', header=TRUE)
+weather_df
+```
+
+change to the same 30min timestamps and use linear interpolation to fill in the values
+
+```{r}
+weather_df <- weather_df %>%
+  mutate(datetimes=as_datetime(ymd_hm(Date.Time..LST., tz="Canada/Saskatchewan"), tz="Canada/Saskatchewan")) %>%
+  mutate(station_temp=Temp..Â.C.,
+         station_humidity=Rel.Hum....,
+         station_pressure=Stn.Press..kPa.) %>%
+  select(datetimes, station_temp, station_humidity, station_pressure)
+intervals <- seq(start_time, end_time, by="30 min")
+interval_df <- data.frame(datetimes=intervals)
+weather_df <- merge(x=interval_df, y=weather_df, by=c("datetimes"), all.x=TRUE)
+weather_df$station_temp <- na_interpolation(weather_df$station_temp)
+weather_df$station_humidity <- na_interpolation(weather_df$station_humidity)
+weather_df$station_pressure <- na_interpolation(weather_df$station_pressure)
+```
+
+We insert station temp into tcm_temp NA's. (is it possible that some quantifiers will have a slightly higher or lower temperature due to microbial activity? If so, perhaps a regression should be fit so that we are imputing above/below the station temp at quantifiers that tend to be above/below the surrounding average temperature...)
+
+```{r}
+df <- df %>%
+  group_by(name) %>%
+  mutate(tcm_temp = ifelse(is.na(tcm_temp), weather_df$station_temp, tcm_temp)) %>%
+  ungroup()
+```
+
+# More challenging imputation examples...
+
+We can regress one quantifier on the others, ignoring a specified time period, and then predict values for the specified time period. This works when the quantifier has lots of data such that a reasonable relationship can be fit and used to predict. We will create a function called regress_one_q_on_others() for this. It is current workflow to store the regression changes in a different df (e.g. name it df2), and plot this new df to visually check the improvement, before storing/committing the results in the main df.
+
+Other times there is no data for a quantifier to establish such a relationship and we instead have to ignore it, fit the others, and then use some sort of average of the others to determine reasonable coefficients to use to fill-in all the values for said quantifier. We will create a function called impute_0s() for this. We also create a function named check_regression_fits() as a way to ensure we are getting reasonable fits from the other quantifiers before proceeding with the imputation.
+
+```{r}
+regress_one_q_on_others <- function(df, variable, y, xs, time_a, time_b) {
+  time_interval <- interval(time_a, time_b)
+  wide <- df %>%
+    select(datetimes, name, all_of(variable)) %>%
+    pivot_wider(id_cols=datetimes, names_from=name, values_from=all_of(variable))
+  wide_filtered <- wide %>%
+    filter(!datetimes %within% time_interval)
+  model_formula <- as.formula(paste(sprintf("%s ~ ", y), paste(xs, collapse=" + "), " - 1"))
+  model <- lm(model_formula, data=wide_filtered)
+  new_temps <- predict(model, wide %>% filter(datetimes %within% time_interval))
+  df <- df %>%
+    mutate("{variable}" := replace(get(variable),
+                                   datetimes %within% time_interval & name==y,
+                                   new_temps))
+  return (df)
+}
+
+linear_regression_imputation <- function(df, x, y, quantifiers_to_ignore, verbose=FALSE) {
+  # this function thinks of 0's as values that need to be replaced with a regression
+  # estimate. So we convert NA's to 0's for consistency.
+  df <- df %>%
+    mutate("{x}" := ifelse(is.na(get(x)), 0, get(x)),
+           "{y}" := ifelse(is.na(get(y)), 0, get(y)))
+  
+  ### x vs y - unfiltered ###
+  if (verbose) {
+    p <- df %>% ggplot(aes(x=get(x), y=get(y), colour=name)) + geom_point() +
+      labs(x=x, y=y)
+    print(p)
+  }
+  
+  # we fit a multilevel model grouped by quantifier on non-zero data and
+  # on quantifiers not in the quantifiers to ignore list
+  model_df <- df %>% 
+    filter(get(y) != 0, get(x) != 0,
+           !name %in% quantifiers_to_ignore)
+  model_formula <- as.formula(sprintf("%s ~ 1 + %s + (1 + %s | name)", y, x, x))
+  M1 <- lmer(formula = model_formula,
+             data = model_df,
+             REML = FALSE)
+  model_groups <- row.names(coef(M1)$name)
+  if (verbose) print(summary(M1))
+  
+  # fitted reggression line plots and average regression line are only run
+  # if verbose==TRUE
+  ### fitted regression lines ###
+  if (verbose) {
+    coefficients <- coef(M1)$name
+    model_df <- model_df %>% mutate(m1y=coefficients[name, 1] + coefficients[name, 2]*get(x))
+    p <- model_df %>% 
+      ggplot(aes(x=get(x), y=get(y))) + geom_point(aes(colour=name)) +
+      geom_line(aes(y=m1y, group=name),
+                linetype="longdash", colour="red", size=0.75) + labs(x=x, y=y)
+    print(p)
+    
+    # here we use the 'overall average regression line' to impute data, mostly to
+    # show that we could do better
+    avg_b0 <- fixef(M1)[[1]]
+    avg_b1 <- fixef(M1)[[2]]
+    
+    ### imputed data with avg regression ###
+    p <- df %>%
+      # if a quantifier has an estimate from the model already then use that else use
+      # the averaged intercept and slope estimate. Also, if a regression estimate
+      # would be negative then use 0 instead.
+      mutate(regressed_y = ifelse(name %in% model_groups,
+                                  ifelse(coef(M1)$name[name, 1] + coef(M1)$name[name, 2]*get(x) < 0,
+                                         0,
+                                         coef(M1)$name[name, 1] + coef(M1)$name[name, 2]*get(x)),
+                                  ifelse(avg_b0 + avg_b1*get(x) < 0,
+                                         0,
+                                         avg_b0 + avg_b1*get(x)))) %>%
+      mutate("{y}" := ifelse(get(y)==0, regressed_y, get(y))) %>%
+      # if x is still 0 (regression would've made it negative) then make it the intercept
+      #mutate("{y}" := ifelse(get(x)==0, regressed_y, get(y))) %>%
+      ggplot(aes(x=get(x), y=get(y), colour=name)) + geom_point() + labs(x=x, y=y)
+    print(p)
+  }
+
+  # we want to create weights based on distance to each quantifier in order to get
+  # 'weighted average regression lines'. We use median eastings and northings,
+  # compute euclidean distance, then invert distance so that greater distances are
+  # smaller weights and vice versa, then we compute weighted averages for the 
+  # intercepts and slopes. across() operations generally add "_funcname" to the end
+  # of the columns they operate on, so the columns we use will have names of the
+  # form "{quantifier}", "{quantifier}_d", "{quantifier}_d_inv" and so on.
+  
+  # distances
+  df <- df %>%
+    group_by(name) %>%
+    mutate(median_easting = median(easting), median_northing = median(northing)) %>%
+    ungroup()
+  quantifiers <- unique(df$name)
+  for (quantifier in quantifiers) {
+    e <- df %>% filter(name==quantifier) %>% summarise(e=median(easting)) %>% `[[`("e")
+    n <- df %>% filter(name==quantifier) %>% summarise(n=median(northing)) %>% `[[`("n")
+    df <- df %>%
+      group_by(name) %>%
+      mutate("{quantifier}_d" := (median_easting - e)^2 + (median_northing - n)^2) %>%
+      ungroup()
+  }
+  # inverted distances
+  # since we are only going to use the avg'd intercepts and slopes for the quantifiers
+  # that don't already have an estimate (name not in model groups) we use a weight
+  # of 1 for 1/d_Q when d_Q is 0, because although this "messes" up the weighting
+  # it will never actually get used anyway and this way we avoid errors that arise
+  # from trying to do math with Infs
+  add_d_ <- function(x) sprintf("%s_d", x)
+  distance_columns <- sapply(model_groups, add_d_, USE.NAMES=FALSE)
+  inverse_d <- function(d) ifelse(d == 0, 1, 1 / d)
+  df <- df %>%
+    mutate(across(.cols = distance_columns,
+                  .fns = list(inv = inverse_d)))
+  # weighted intercepts and slopes using inverse distance
+  df <- df %>%
+    mutate(weighted_b0 = 0,
+           weighted_b1 = 0,
+           sum_of_weights = 0)
+  for (i in 1:length(coef(M1)$name[, 1])) {
+    quantifier <- row.names(coef(M1)$name)[i]
+    w_col <- sprintf("%s_d_inv", quantifier)
+    df <- df %>%
+      mutate(weighted_b0 = weighted_b0 + get(w_col) * coef(M1)$name[quantifier, 1],
+             weighted_b1 = weighted_b1 + get(w_col) * coef(M1)$name[quantifier, 2],
+             sum_of_weights = sum_of_weights + get(w_col))
+  }
+  df <- df %>%
+    mutate(weighted_b0 = weighted_b0 / sum_of_weights,
+           weighted_b1 = weighted_b1 / sum_of_weights)
+  
+  ### imputed data with weighted average regressions ###
+  # here we replace y values in df first, then plot, so the imputed values
+  # stay in the df so we can save/return them later (we did not do this with the overall
+  # average regression imputation)
+  df <- df %>%
+    # if a quantifier has a regression fit already then use that else use the
+    # weighted averaged intercept and slope estimates. Also, if a regression
+    # estimate would be negative then use 0 instead.
+    mutate(regressed_y = ifelse(name %in% model_groups,
+                                ifelse(coef(M1)$name[name, 1] + coef(M1)$name[name, 2]*get(x) < 0,
+                                       0,
+                                       coef(M1)$name[name, 1] + coef(M1)$name[name, 2]*get(x)),
+                                ifelse(weighted_b0 + weighted_b1*get(x) < 0,
+                                       0,
+                                       weighted_b0 + weighted_b1*get(x))))
+  df <- df %>%
+    # if y is zero we now use the regression value
+    mutate("{y}" := ifelse(get(y)==0 | is.na(get(y)), regressed_y, get(y)))
+  if (verbose) {
+    p <- df %>%
+      ggplot(aes(x=get(x), y=get(y), colour=name)) + geom_point() + labs(x=x, y=y)
+    print(p)
+  }
+  
+  return(df %>% select(all_of(y)))
+}
+
+prop_equal_to_0 <- function(x) {sum(x==0)/length(x)}
+
+impute_0s <- function(df, x, y, cols_prop_0, verbose=FALSE, manual_ignore=c()) {
+  quantifiers_to_ignore <- cols_prop_0 %>%
+    filter(get(y) > 0.8) %>%
+    pull(name)
+  quantifiers_to_ignore <- c(quantifiers_to_ignore, manual_ignore)
+  new_y <- linear_regression_imputation(df, x, y, quantifiers_to_ignore, verbose)
+  df <- df %>% mutate("{y}" := new_y[, y] %>% `[[`(y))
+  return (df)
+}
+
+check_regression_fits <- function(df, x, y, cols_prop_0) {
+  quantifiers_to_ignore <- cols_prop_0 %>%
+    filter(get(y) > 0.8) %>%
+    pull(name)
+  print("Detected quantifiers to ignore:")
+  print(quantifiers_to_ignore)
+  # we fit a multilevel model grouped by quantifier on non-zero data and
+  # on quantifiers not in the quantifiers to ignore list
+  model_df <- df %>% 
+    filter(get(y) != 0, get(x) != 0)
+  model_formula <- as.formula(sprintf("%s ~ 1 + %s + (1 + %s | name)", y, x, x))
+  M1 <- lmer(formula = model_formula,
+             data = model_df,
+             REML = FALSE)
+  model_groups <- row.names(coef(M1)$name)
+  
+  # fitted reggression line plots and average regression line are only run
+  # if verbose==TRUE
+  ### fitted regression lines ###
+  coefficients <- coef(M1)$name
+  model_df <- model_df %>% mutate(m1y=coefficients[name, 1] + coefficients[name, 2]*get(x))
+  p <- model_df %>% 
+    ggplot(aes(x=get(x), y=get(y))) + geom_point(aes(colour=name)) +
+    geom_line(aes(y=m1y, group=name),
+              linetype="solid", colour="black", size=2) + labs(x=x, y=y) +
+    geom_line(aes(y=m1y, group=name, color=name),
+              linetype="longdash", size=1.3) + labs(x=x, y=y)
+  print(p)
+  print(coef(M1))
+}
+
+interpolate_0s <- function(df, variable, q) {
+  df <- df %>%
+  mutate("{variable}" := replace(get(variable),
+                                 name==q & get(variable)==0,
+                                 NA))
+  df <- df %>% mutate("{variable}" := replace(get(variable),
+                                              name==q,
+                                              na_interpolation(df[df$name==q, variable] %>% pull(get(variable)))))
+  return (df)
+}
+```
+
+The current workflow is to consider one variable at a time. We can visualize all the quantifiers together with plot_all_qs_dt() and plot_all_qs_xy(), or individually with plot_each_q() or plot_each_q_xy(), to determine which quantifiers and their corresponding time intervals for which to use regress_one_q_on_others() or if impute_0s() would be helpful.
+
+We define a df cols_prop_0 which has the proportion of 0's for each column for each quantifier as a way to quickly determine which quantifiers that may require imputation as well as which ones should be ignored when fitting regressions to use since having a large proportion of 0's would lead to a poor and potentially misleading fit.
+
+```{r}
+cols_prop_0 <- df %>%
+  group_by(name) %>%
+  summarise(across(tcm_temp:sensor3_pressure_temp, prop_equal_to_0))
+```
+
+
+# Examples of Data Cleaning Troubles
+
+## CO2
+
+### Sensor 1
+
+```{r}
+variable <- "sensor1_conc_co2"
+```
+
+```{r fig.height=5, fig.width=12}
+df %>% plot_all_qs_xy(x="sensor1_oxy", y="sensor1_conc_co2", type="points", qs_to_ignore=c())
+```
+
+This is the canonical example where Q05 has 0's for all co2 readings, yet we know it is simply not believable that there is no co2 there (from consultation with expert team members/scientists). Furthermore, we have such a strong negative relationship between co2 and oxygen both empirically (as seen in the data) and theoretically (the microbial activity takes in oxygen to breakdown hydrocarbons and then emits co2), and we have plenty of oxygen measurements for Q05. Thus, it seems likely that we can learn the relationship between co2 and oxygen then use this to impute the 0's for Q05's co2 values.
+
+Note that this negative relationship appears non-linear, and it can be fit more accurately with non-linear models; however, these have proven very challenging to generalize and easily result in terrible overfitting that defeats the purpose of imputing data at all and is even more time-consuming. For now we are keeping things simple and just using simple linear regression fits with the intention of returning to this and making the fits more accurate as the need and the time arises later.
+
+In general I find it is a bit easier to decipher which lines to include/exclude when looking at each individually.
+
+```{r}
+df %>% plot_each_q_xy(x="sensor1_oxy", y="sensor1_conc_co2")
+```
+
+Here we notice some artifacts that were introduced by the linear interpolation from earlier. We can either work with this, or have missing data. This is something we currently assess on a case-by-case basis.
+
+At a glance, we should ignore 2, 5, 12. The check_regression_fits() function will also print out which quantifiers it will automatically ignore based on if the proportion of 0's is too high (i.e. > 0.8). It will auto ignore 5 so we need to manually ignore 2 and 12.
+
+```{r warning=FALSE}
+y <- "sensor1_conc_co2"
+x <- "sensor1_oxy"
+check_regression_fits(df, x, y, cols_prop_0)
+```
+
+impute_0s() will perform the fitting and imputing
+
+```{r warning=FALSE}
+df <- impute_0s(df, x, y, cols_prop_0, manual_ignore=c("Q02", "Q12"))
+```
+
+Then we can visualize the results.
+
+```{r}
+df %>% plot_all_qs_xy(x="sensor1_oxy", y="sensor1_conc_co2", type="points", qs_to_ignore=c())
+```
+
+Now Q05 no longer has all 0's for co2. We can see this more clearly in the individual plots.
+
+```{r}
+df %>% plot_each_q(variable)
+```
+
+
+```{r}
+df %>% plot_each_q_xy(x="sensor1_oxy", y="sensor1_conc_co2")
+```
+
+We turn to sensor3_conc_ch4 for some different examples of cleaning issues.
+
+```{r}
+variable <- "sensor3_conc_ch4"
+```
+
+```{r}
+df %>% plot_all_qs_dt(variable, qs_to_ignore=c("Q10")) # Q10 has other issues we can discuss another time...
+```
+
+```{r}
+df %>% plot_each_q(variable)
+```
+
+
+We need to clean up how Q08, Q15, and Q13 seem to dip to 0 sporadically. The interpolate_0s() function can handle this. Then we can use regress_one_q_on_others() to "fix" some of these timeseries over specified time intervals. For example Q13 from around the 14th till the 30th seems to be a sensor error. We can use regress_one_q_on_others() to impute this time interval. We can do the same to "fix" Q04 around the 7th-14th and Q08 from around the 22nd till the end.
+
+```{r}
+df <- interpolate_0s(df, variable, "Q08")
+df <- interpolate_0s(df, variable, "Q15")
+df <- interpolate_0s(df, variable, "Q13")
+q_to_change <- "Q13"
+df <- regress_one_q_on_others(df, variable, q_to_change,
+                              xs=quantifiers[!quantifiers %in% c(q_to_change,"Q10", "Q05", "Q01", "Q02", "Q03", "Q15")],
+                              time_a=ymd_hms("2021-10-14 12:00:00", tz="Canada/Saskatchewan"),
+                              time_b=ymd_hms("2021-10-30 12:00:00", tz="Canada/Saskatchewan"))
+q_to_change <- "Q04"
+df <- regress_one_q_on_others(df, variable, q_to_change,
+                              xs=quantifiers[!quantifiers %in% c(q_to_change,"Q10", "Q05", "Q01", "Q02", "Q03", "Q08", "Q13", "Q15")],
+                              time_a=ymd_hms("2021-10-07 12:00:00", tz="Canada/Saskatchewan"),
+                              time_b=ymd_hms("2021-10-14 12:00:00", tz="Canada/Saskatchewan"))
+q_to_change <- "Q08"
+df <- regress_one_q_on_others(df, variable, q_to_change,
+                              xs=quantifiers[!quantifiers %in% c(q_to_change,"Q10", "Q05", "Q01", "Q02", "Q03", "Q04", "Q13", "Q15")],
+                              time_a=ymd_hms("2021-10-22 00:00:00", tz="Canada/Saskatchewan"),
+                              time_b=end_time)
+```
+
+```{r}
+df %>% plot_all_qs_dt(variable, qs_to_ignore=c("Q10"))
+```
+
+## Attempting to clean the rest...
+
+## CO2
+
+### Sensor 2
+
+```{r}
+variable <- "sensor2_conc_co2"
+```
+
+```{r}
+df %>% plot_each_q(variable)
+```
+
+```{r}
+df %>% plot_each_q_xy(x="sensor2_oxy", y="sensor2_conc_co2")
+```
+
+```{r}
+df %>% plot_all_qs_dt(variable, qs_to_ignore=c("Q12", "Q05"))
+```
+
+
+```{r}
+# set all Q01 to 0
+df <- df %>%
+  mutate("{variable}" := replace(get(variable),
+                                 name=="Q01",
+                                 0))
+df <- interpolate_0s(df, variable, "Q03")
+# for Q05, wherever oxygen is non-zero make co2 0
+df <- df %>%
+  mutate("{variable}" := replace(get(variable),
+                                 name=="Q05" & sensor2_oxy > 0,
+                                 0))
+q_to_change <- "Q06"
+df <- regress_one_q_on_others(df, variable, q_to_change,
+                              xs=quantifiers[!quantifiers %in% c(q_to_change, "Q05", "Q01", "Q03", "Q12", "Q08")],
+                              time_a=ymd_hms("2021-10-09 00:00:00", tz="Canada/Saskatchewan"),
+                              time_b=ymd_hms("2021-10-10 00:00:00", tz="Canada/Saskatchewan"))
+# Q08, make 0's NA's and then interpolate them
+df <- interpolate_0s(df, variable, "Q08")
+q_to_change <- "Q08"
+df <- regress_one_q_on_others(df, variable, q_to_change,
+                              xs=quantifiers[!quantifiers %in% c(q_to_change, "Q05", "Q01", "Q12")],
+                              time_a=ymd_hms("2021-10-13 00:00:00", tz="Canada/Saskatchewan"),
+                              time_b=ymd_hms("2021-10-22 00:00:00", tz="Canada/Saskatchewan"))
+df <- regress_one_q_on_others(df, variable, q_to_change,
+                              xs=quantifiers[!quantifiers %in% c(q_to_change, "Q05", "Q01", "Q12")],
+                              time_a=ymd_hms("2021-10-22 12:00:00", tz="Canada/Saskatchewan"),
+                              time_b=ymd_hms("2021-10-27 00:00:00", tz="Canada/Saskatchewan"))
+# Q12, make > 15 NA's and then interpolate them
+df <- df %>%
+  mutate("{variable}" := replace(get(variable),
+                                 name=="Q12" & get(variable) > 15,
+                                 NA))
+df <- df %>%
+  mutate("{variable}" := replace(get(variable),
+                                 name=="Q12",
+                                 na_interpolation(df[df$name=="Q12", variable]) %>%
+                                   pull(variable)))
+
+
+```
+
+```{r}
+y <- "sensor2_conc_co2"
+x <- "sensor2_oxy"
+check_regression_fits(df, x, y, cols_prop_0)
+```
+
+```{r}
+df <- impute_0s(df, x, y, cols_prop_0, manual_ignore=c("Q04", "Q05", "Q06", "Q10", "Q12"))
+```
+
+### Sensor 3
+
+```{r}
+variable <- "sensor3_conc_co2"
+```
+
+```{r fig.height=5, fig.width=12}
+df %>% plot_all_qs_dt(y=variable, qs_to_ignore=c())
+```
+
+```{r warning=FALSE}
+df <- df %>%
+  mutate("{variable}" := replace(get(variable),
+                                 name=="Q05",
+                                 0))
+q_to_change <- "Q13"
+df <- regress_one_q_on_others(df, variable, q_to_change,
+                              xs=quantifiers[!quantifiers %in% c(q_to_change, "Q05")],
+                              time_a=ymd_hms("2021-10-13 12:00:00", tz="Canada/Saskatchewan"),
+                              time_b=end_time)
+df <- regress_one_q_on_others(df, variable, q_to_change,
+                              xs=quantifiers[!quantifiers %in% c(q_to_change, "Q05")],
+                              time_a=start_time,
+                              time_b=ymd_hms("2021-10-06 12:00:00", tz="Canada/Saskatchewan"))
+q_to_change <- "Q08"
+df <- regress_one_q_on_others(df, variable, q_to_change,
+                              xs=quantifiers[!quantifiers %in% c(q_to_change, "Q05")],
+                              time_a=ymd_hms("2021-10-25 00:00:00", tz="Canada/Saskatchewan"),
+                              time_b=end_time)
+q_to_change <- "Q04"
+df <- regress_one_q_on_others(df, variable, q_to_change,
+                              xs=quantifiers[!quantifiers %in% c(q_to_change, "Q05")],
+                              time_a=ymd_hms("2021-10-05 12:00:00", tz="Canada/Saskatchewan"),
+                              time_b=ymd_hms("2021-10-14 12:00:00", tz="Canada/Saskatchewan"))
+df <- regress_one_q_on_others(df, variable, q_to_change,
+                              xs=quantifiers[!quantifiers %in% c(q_to_change, "Q05")],
+                              time_a=ymd_hms("2021-10-15 00:00:00", tz="Canada/Saskatchewan"),
+                              time_b=ymd_hms("2021-10-21 00:00:00", tz="Canada/Saskatchewan"))
+q_to_change <- "Q10"
+df <- regress_one_q_on_others(df, variable, q_to_change,
+                              xs=quantifiers[!quantifiers %in% c(q_to_change, "Q05", "Q03", "Q13")],
+                              time_a=ymd_hms("2021-10-20 00:00:00", tz="Canada/Saskatchewan"),
+                              time_b=ymd_hms("2021-10-28 12:00:00", tz="Canada/Saskatchewan"))
+df <- regress_one_q_on_others(df, variable, q_to_change,
+                              xs=quantifiers[!quantifiers %in% c(q_to_change, "Q05", "Q03", "Q13")],
+                              time_a=ymd_hms("2021-10-05 12:00:00", tz="Canada/Saskatchewan"),
+                              time_b=ymd_hms("2021-10-10 12:00:00", tz="Canada/Saskatchewan"))
+df <- regress_one_q_on_others(df, variable, q_to_change,
+                              xs=quantifiers[!quantifiers %in% c(q_to_change, "Q05", "Q03", "Q13")],
+                              time_a=ymd_hms("2021-10-12 00:00:00", tz="Canada/Saskatchewan"),
+                              time_b=ymd_hms("2021-10-14 12:00:00", tz="Canada/Saskatchewan"))
+df <- regress_one_q_on_others(df, variable, q_to_change,
+                              xs=quantifiers[!quantifiers %in% c(q_to_change, "Q05", "Q03", "Q13")],
+                              time_a=ymd_hms("2021-10-15 12:00:00", tz="Canada/Saskatchewan"),
+                              time_b=ymd_hms("2021-10-18 00:00:00", tz="Canada/Saskatchewan"))
+df <- regress_one_q_on_others(df, variable, q_to_change,
+                              xs=quantifiers[!quantifiers %in% c(q_to_change, "Q05", "Q03", "Q13")],
+                              time_a=ymd_hms("2021-10-28 12:00:00", tz="Canada/Saskatchewan"),
+                              time_b=end_time)
+df <- regress_one_q_on_others(df, variable, q_to_change,
+                              xs=quantifiers[!quantifiers %in% c(q_to_change, "Q05", "Q03", "Q13")],
+                              time_a=start_time,
+                              time_b=ymd_hms("2021-10-04 12:00:00", tz="Canada/Saskatchewan"))
+q_to_change <- "Q13"
+df <- regress_one_q_on_others(df, variable, q_to_change,
+                              xs=quantifiers[!quantifiers %in% c(q_to_change, "Q05", "Q03", "Q06", "Q10")],
+                              time_a=start_time,
+                              time_b=ymd_hms("2021-10-07 12:00:00", tz="Canada/Saskatchewan"))
+df <- regress_one_q_on_others(df, variable, q_to_change,
+                              xs=quantifiers[!quantifiers %in% c(q_to_change, "Q05", "Q03", "Q06", "Q10")],
+                              time_a=ymd_hms("2021-10-06 00:00:00", tz="Canada/Saskatchewan"),
+                              time_b=ymd_hms("2021-10-09 12:00:00", tz="Canada/Saskatchewan"))
+df <- regress_one_q_on_others(df, variable, q_to_change,
+                              xs=quantifiers[!quantifiers %in% c(q_to_change, "Q05", "Q03", "Q06", "Q10")],
+                              time_a=ymd_hms("2021-10-12 00:00:00", tz="Canada/Saskatchewan"),
+                              time_b=ymd_hms("2021-10-16 00:00:00", tz="Canada/Saskatchewan"))
+df <- regress_one_q_on_others(df, variable, q_to_change,
+                              xs=quantifiers[!quantifiers %in% c(q_to_change, "Q05", "Q03", "Q06", "Q10")],
+                              time_a=ymd_hms("2021-10-22 00:00:00", tz="Canada/Saskatchewan"),
+                              time_b=end_time)
+df <- df %>%
+  group_by(name) %>%
+  mutate("{variable}" := replace(get(variable),
+                                 row_number()==n(),
+                                 mean(get(variable)))) %>%
+  ungroup()
+```
+
+
+```{r fig.height=5, fig.width=12}
+df %>% plot_all_qs_dt(y=variable, qs_to_ignore=c())
+```
+
+## Oxygen
+
+### Sensor 1
+
+```{r}
+variable <- "sensor1_oxy"
+```
+
+```{r}
+df %>% plot_each_q(variable)
+```
+
+```{r}
+df %>% plot_each_q_xy(x="sensor1_conc_co2", y="sensor1_oxy")
+```
+
+```{r}
+df %>% plot_all_qs_dt(variable)
+```
+
+
+```{r}
+y <- "sensor1_oxy"
+x <- "sensor1_conc_co2"
+check_regression_fits(df, x, y, cols_prop_0)
+```
+
+```{r}
+df <- impute_0s(df, x, y, cols_prop_0, manual_ignore=c("Q02"))
+```
+
+### Sensor 2
+
+```{r}
+variable <- "sensor2_oxy"
+```
+
+```{r}
+df %>% plot_each_q(variable)
+```
+
+```{r}
+df %>% plot_each_q_xy(x="sensor2_conc_co2", y="sensor2_oxy")
+```
+
+```{r}
+df %>% plot_all_qs_dt(variable)
+```
+
+```{r}
+df <- df %>%
+  mutate("{variable}" := replace(get(variable),
+                                 name=="Q05",
+                                 0))
+df <- df %>%
+  mutate("{variable}" := replace(get(variable),
+                                 name=="Q08",
+                                 0))
+```
+
+
+```{r}
+y <- "sensor2_oxy"
+x <- "sensor2_conc_co2"
+check_regression_fits(df, x, y, cols_prop_0)
+```
+
+```{r}
+df <- impute_0s(df, x, y, cols_prop_0, manual_ignore=c("Q02"))
+```
+
+### Sensor 3
+
+```{r}
+variable <- "sensor3_oxy"
+```
+
+```{r}
+df %>% plot_each_q(variable)
+```
+
+```{r}
+df %>% plot_each_q_xy(x="sensor3_conc_co2", y="sensor3_oxy")
+```
+
+```{r}
+df <- df %>%
+  mutate("{variable}" := replace(get(variable),
+                                 name=="Q08",
+                                 0))
+df <- df %>%
+  mutate("{variable}" := replace(get(variable),
+                                 name=="Q10",
+                                 0))
+df <- df %>%
+  mutate("{variable}" := replace(get(variable),
+                                 name=="Q15" & get(variable) < 25,
+                                 0))
+df <- df %>%
+  mutate("{variable}" := replace(get(variable),
+                                 name=="Q13" & get(variable) < 0.5,
+                                 0))
+```
+
+```{r}
+check_regression_fits(df, x="sensor3_conc_co2", y="sensor3_oxy", cols_prop_0)
+```
+
+```{r}
+df <- impute_0s(df, x, y, cols_prop_0, manual_ignore=c("Q03", "Q13"))
+```
+
+```{r}
+df %>% plot_all_qs_dt(variable)
+```
+
+```{r}
+df <- interpolate_0s(df, variable, "Q15")
+df <- interpolate_0s(df, variable, "Q05")
+```
+
+
+## CH4
+
+### Sensor 1
+
+```{r}
+variable <- "sensor1_conc_ch4"
+```
+
+```{r}
+df %>% plot_each_q(variable)
+```
+
+```{r}
+df %>% plot_each_q_xy(x="sensor1_conc_phc", y="sensor1_conc_ch4")
+```
+
+```{r}
+df <- df %>%
+  mutate("{variable}" := replace(get(variable),
+                                 name=="Q05",
+                                 0))
+df <- df %>%
+  mutate("{variable}" := replace(get(variable),
+                                 name=="Q02",
+                                 0))
+df <- df %>%
+  mutate("{variable}" := replace(get(variable),
+                                 name=="Q01",
+                                 0))
+q_to_change <- "Q08"
+df <- regress_one_q_on_others(df, variable, q_to_change,
+                              xs=quantifiers[!quantifiers %in% c(q_to_change, "Q05")],
+                              time_a=ymd_hms("2021-10-18 12:00:00", tz="Canada/Saskatchewan"),
+                              time_b=ymd_hms("2021-10-28 12:00:00", tz="Canada/Saskatchewan"))
+```
+
+```{r fig.height=5, fig.width=12}
+df %>% plot_all_qs_dt(y=variable, qs_to_ignore=c("Q12"))
+```
+
+### Sensor 2
+
+```{r}
+variable <- "sensor2_conc_ch4"
+```
+
+```{r}
+df %>% plot_each_q(variable)
+```
+
+```{r}
+df %>% plot_each_q_xy(x="sensor2_conc_phc", y="sensor2_conc_ch4")
+```
+
+```{r}
+df %>% plot_all_qs_dt("sensor2_conc_ch4", qs_to_ignore=c("Q10"))
+```
+
+
+```{r}
+df <- df %>%
+  mutate("{variable}" := replace(get(variable),
+                                 name=="Q01",
+                                 0))
+df <- df %>%
+  mutate("{variable}" := replace(get(variable),
+                                 name=="Q05",
+                                 0))
+df <- df %>%
+  mutate("{variable}" := replace(get(variable),
+                                 (name=="Q08" & get(variable) > 45) | (name=="Q08" & get(variable) < 9),
+                                 NA))
+df <- df %>% mutate("{variable}" := replace(get(variable),
+                                             name=="Q08",
+                                             na_interpolation(df[df$name=="Q08", variable] %>% pull(get(variable)))))
+df <- interpolate_0s(df, variable, "Q13")
+q_to_change <- "Q08"
+df <- regress_one_q_on_others(df, variable, q_to_change,
+                              xs=quantifiers[!quantifiers %in% c(q_to_change, "Q12")],
+                              time_a=ymd_hms("2021-10-18 12:00:00", tz="Canada/Saskatchewan"),
+                              time_b=end_time)
+```
+
+### Sensor 3
+
+```{r}
+variable <- "sensor3_conc_ch4"
+```
+
+```{r}
+df %>% plot_each_q(variable)
+```
+
+```{r}
+df %>% plot_each_q_xy(x="sensor3_conc_phc", y="sensor3_conc_ch4")
+```
+
+```{r}
+df %>% plot_all_qs_dt(variable, qs_to_ignore=c())
+```
+
+
+```{r}
+df <- interpolate_0s(df, variable, "Q08")
+df <- interpolate_0s(df, variable, "Q15")
+df <- interpolate_0s(df, variable, "Q13")
+q_to_change <- "Q04"
+df <- regress_one_q_on_others(df, variable, q_to_change,
+                              xs=quantifiers[!quantifiers %in% c(q_to_change,"Q10", "Q05", "Q01", "Q02", "Q03", "Q08", "Q13", "Q15")],
+                              time_a=ymd_hms("2021-10-07 12:00:00", tz="Canada/Saskatchewan"),
+                              time_b=ymd_hms("2021-10-14 12:00:00", tz="Canada/Saskatchewan"))
+q_to_change <- "Q08"
+df <- regress_one_q_on_others(df, variable, q_to_change,
+                              xs=quantifiers[!quantifiers %in% c(q_to_change,"Q10", "Q05", "Q01", "Q02", "Q03", "Q04", "Q13", "Q15")],
+                              time_a=ymd_hms("2021-10-12 12:00:00", tz="Canada/Saskatchewan"),
+                              time_b=end_time)
+q_to_change <- "Q13"
+df <- regress_one_q_on_others(df, variable, q_to_change,
+                              xs=quantifiers[!quantifiers %in% c(q_to_change,"Q10", "Q05", "Q01", "Q02", "Q03", "Q15")],
+                              time_a=ymd_hms("2021-10-14 12:00:00", tz="Canada/Saskatchewan"),
+                              time_b=ymd_hms("2021-10-30 12:00:00", tz="Canada/Saskatchewan"))
+```
+
+## PHC
+
+Ignored for now as we aren't currently using it for any of the reports
+
+## Pid
+
+### Sensor 1
+
+```{r}
+variable <- "sensor1_pid"
+```
+
+```{r}
+df %>% plot_each_q(variable)
+```
+
+```{r}
+df %>% plot_each_q_xy(x="datetimes", y=variable)
+```
+
+
+```{r}
+df %>% plot_all_qs_dt(variable)
+```
+
+```{r}
+time_a <- ymd_hms("2021-10-12 12:00:00", tz="Canada/Saskatchewan")
+time_b <- ymd_hms("2021-10-15 00:00:00", tz="Canada/Saskatchewan")
+df <- df %>%
+  mutate("{variable}" := replace(get(variable),
+                                 name=="Q01" & datetimes > time_a & datetimes < time_b,
+                                 0))
+df <- interpolate_0s(df, variable, "Q01")
+```
+
+### Sensor 2
+
+```{r}
+variable <- "sensor2_pid"
+```
+
+```{r}
+df %>% plot_each_q(variable)
+```
+
+```{r}
+df %>% plot_all_qs_dt(variable)
+```
+
+
+```{r}
+df <- df %>%
+  mutate("{variable}" := replace(get(variable),
+                                 name=="Q05",
+                                 2000))
+df <- interpolate_0s(df, variable, "Q13")
+q_to_change <- "Q04"
+df <- regress_one_q_on_others(df, variable, q_to_change,
+                              xs=quantifiers[!quantifiers %in% c(q_to_change)],
+                              time_a=ymd_hms("2021-10-29 00:00:00", tz="Canada/Saskatchewan"),
+                              time_b=end_time)
+q_to_change <- "Q08"
+df <- regress_one_q_on_others(df, variable, q_to_change,
+                              xs=quantifiers[!quantifiers %in% c(q_to_change)],
+                              time_a=ymd_hms("2021-10-18 00:00:00", tz="Canada/Saskatchewan"),
+                              time_b=end_time)
+q_to_change <- "Q15"
+df <- regress_one_q_on_others(df, variable, q_to_change,
+                              xs=quantifiers[!quantifiers %in% c(q_to_change, "Q05")],
+                              time_a=ymd_hms("2021-10-15 00:00:00", tz="Canada/Saskatchewan"),
+                              time_b=end_time)
+```
+
+### Sensor 3
+
+```{r}
+variable <- "sensor3_pid"
+```
+
+```{r}
+df %>% plot_each_q(variable)
+```
+
+
+```{r}
+df <- interpolate_0s(df, variable, "Q03")
+df <- interpolate_0s(df, variable, "Q05")
+df <- interpolate_0s(df, variable, "Q08")
+df <- interpolate_0s(df, variable, "Q16")
+df <- df %>%
+  mutate("{variable}" := replace(get(variable),
+                                 name=="Q06",
+                                 0))
+q_to_change <- "Q10"
+df <- regress_one_q_on_others(df, variable, q_to_change,
+                              xs=quantifiers[!quantifiers %in% c(q_to_change, "Q13", "Q06")],
+                              time_a=start_time,
+                              time_b=ymd_hms("2021-10-20 15:00:00", tz="Canada/Saskatchewan"))
+q_to_change <- "Q08"
+df <- regress_one_q_on_others(df, variable, q_to_change,
+                              xs=quantifiers[!quantifiers %in% c(q_to_change)],
+                              time_a=ymd_hms("2021-10-18 00:00:00", tz="Canada/Saskatchewan"),
+                              time_b=end_time)
+q_to_change <- "Q13"
+df <- regress_one_q_on_others(df, variable, q_to_change,
+                              xs=quantifiers[!quantifiers %in% c(q_to_change)],
+                              time_a=ymd_hms("2021-10-11 12:00:00", tz="Canada/Saskatchewan"),
+                              time_b=ymd_hms("2021-10-30 00:00:00", tz="Canada/Saskatchewan"))
+```
+
+```{r fig.height=5, fig.width=12}
+df2 %>% plot_all_qs_dt(y=variable, qs_to_ignore=c())
+```
+
+## Pid Correction
+
+0.53(pid - mean(background))
+
+Currently we clip negative values to 0.00001 and then rescale to the desired right sensor rather than clipping to the right sensor.
+
+```{r}
+background <- "Q01"
+
+background_mean_pid_1 <- df %>%
+  filter(name == background) %>%
+  pull(sensor1_pid) %>%
+  mean()
+background_mean_pid_2 <- df %>%
+  filter(name == background) %>%
+  pull(sensor2_pid) %>%
+  mean()
+background_mean_pid_3 <- df %>%
+  filter(name == background) %>%
+  pull(sensor3_pid) %>%
+  mean()
+df <- df %>%
+  mutate(sensor1_pid_corr = 0.53 * (sensor1_pid - background_mean_pid_1),
+         sensor2_pid_corr = 0.53 * (sensor2_pid - background_mean_pid_2),
+         sensor3_pid_corr = 0.53 * (sensor3_pid - background_mean_pid_3))
+
+# clip < 0 to 0.00001
+df <- df %>%
+  mutate(sensor1_pid_corr = ifelse(sensor1_pid_corr < 0, 0.00001, sensor1_pid_corr),
+         sensor2_pid_corr = ifelse(sensor2_pid_corr < 0, 0.00001, sensor2_pid_corr),
+         sensor3_pid_corr = ifelse(sensor3_pid_corr < 0, 0.00001, sensor3_pid_corr))
+
+# right sensor: sensor1 = 20, sensor2 = 200, sensor3 = 2000
+# rescale
+df <- df %>%
+  mutate(sensor1_pid_corr = rescale(sensor1_pid_corr, to=c(0.00001, 20)),
+         sensor2_pid_corr = rescale(sensor2_pid_corr, to=c(0.00001, 200)),
+         sensor3_pid_corr = rescale(sensor3_pid_corr, to=c(0.00001, 2000)))
+```
+
+# Save the cleaned data
+
+```{r}
+write.csv(df, "../data/site_A_cleaned.csv", row.names=FALSE)
+```
+
